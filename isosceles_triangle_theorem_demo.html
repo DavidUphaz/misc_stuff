@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Isosceles Triangle Theorem — Paper Folding</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        html, body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #0f172a;
+        }
+
+        /* Full-viewport geometry canvas */
+        #geoCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+        }
+
+        /* Minimal floating bottom bar containing ONLY the fold slider */
+        .slider-dock {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(560px, calc(100vw - 32px));
+            background: rgba(255, 255, 255, 0.94);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid #e2e8f0;
+            border-radius: 999px;
+            padding: 14px 24px;
+            box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.08), 0 4px 10px -2px rgba(15, 23, 42, 0.04);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            z-index: 10;
+        }
+
+        .slider-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: #334155;
+            letter-spacing: 0.01em;
+            white-space: nowrap;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            flex: 1;
+            height: 28px;
+            background: transparent;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-webkit-slider-runnable-track {
+            height: 8px;
+            border-radius: 999px;
+            background: #e2e8f0;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #4f46e5;
+            border: 3px solid #ffffff;
+            box-shadow: 0 2px 8px rgba(79, 70, 229, 0.45);
+            margin-top: -8px;
+            transition: transform 0.12s ease, background-color 0.12s ease;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+            background: #4338ca;
+        }
+
+        input[type="range"]::-moz-range-track {
+            height: 8px;
+            border-radius: 999px;
+            background: #e2e8f0;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #4f46e5;
+            border: 3px solid #ffffff;
+            box-shadow: 0 2px 8px rgba(79, 70, 229, 0.45);
+        }
+
+        input[type="range"]:focus {
+            outline: none;
+        }
+
+        .slider-value {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-variant-numeric: tabular-nums;
+            font-size: 15px;
+            font-weight: 700;
+            color: #4f46e5;
+            min-width: 44px;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="geoCanvas"></canvas>
+
+    <div class="slider-dock">
+        <span class="slider-label">Fold</span>
+        <input id="foldSlider" type="range" min="0" max="99.4" step="0.2" value="0" aria-label="Paper fold percentage">
+        <span id="foldValue" class="slider-value"></span>
+    </div>
+
+    <script>
+        (function () {
+            const canvas = document.getElementById('geoCanvas');
+            const ctx = canvas.getContext('2d');
+            const foldSlider = document.getElementById('foldSlider');
+            const foldValue = document.getElementById('foldValue');
+
+            // Normalized geometry state (safe ratios within viewport padding)
+            const state = {
+                heightRatio: 0.54,     // Triangle height as fraction of viewport height
+                halfBaseRatio: 0.22,   // Half-base width as fraction of scale reference
+                foldProgress: 0,       // 0.0 to 1.0
+                dragging: null,        // 'A', 'B', or 'C'
+                hovered: null
+            };
+
+            let width = Math.max(300, window.innerWidth || 800);
+            let height = Math.max(300, window.innerHeight || 600);
+            let dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+            function resizeCanvas() {
+                width = Math.max(300, window.innerWidth || 800);
+                height = Math.max(300, window.innerHeight || 600);
+                dpr = Math.min(window.devicePixelRatio || 1, 2);
+                canvas.width = Math.round(width * dpr);
+                canvas.height = Math.round(height * dpr);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                draw();
+            }
+
+            // Compute safe clamped pixel coordinates of vertices A, B, C, and midpoint M
+            function getGeometry() {
+                const padding = 80;
+                const centerX = width * 0.5;
+                // Keep base safely above the bottom slider dock and readout badge
+                const baseY = Math.max(padding + 80, Math.min(height - 145, height * 0.72));
+                const scaleRef = Math.min(width, height * 1.25);
+
+                const maxTriHeight = Math.max(60, baseY - padding);
+                const maxHalfBase = Math.max(60, centerX - padding);
+
+                const triHeight = Math.max(60, Math.min(maxTriHeight, state.heightRatio * height));
+                const halfBase = Math.max(60, Math.min(maxHalfBase, state.halfBaseRatio * scaleRef));
+
+                const A = { x: centerX, y: baseY - triHeight };
+                const B = { x: centerX - halfBase, y: baseY };
+                const C = { x: centerX + halfBase, y: baseY };
+                const M = { x: centerX, y: baseY };
+
+                const baseAngleRad = Math.atan2(triHeight, halfBase);
+                const baseAngleDeg = (baseAngleRad * 180) / Math.PI;
+
+                return { A, B, C, M, triHeight, halfBase, baseAngleRad, baseAngleDeg };
+            }
+
+            // Pure 2D orthographic folding across the vertical symmetry axis x = M.x
+            // Immune to perspective divide-by-zero or coordinate inversion
+            function getFoldedC(B, C, M, halfBase, rawFold) {
+                const fold = rawFold >= 0.995 ? 1 : Math.max(0, Math.min(1, rawFold));
+                if (fold >= 1) {
+                    return { x: B.x, y: B.y, fold: 1 };
+                }
+                if (fold <= 0.001) {
+                    return { x: C.x, y: C.y, fold: 0 };
+                }
+                const theta = fold * Math.PI;
+                const lift = Math.min(36, halfBase * 0.18);
+                return {
+                    x: M.x + halfBase * Math.cos(theta),
+                    y: M.y - lift * Math.sin(theta),
+                    fold
+                };
+            }
+
+            // Subtle dot-grid paper background
+            function drawBackground() {
+                ctx.fillStyle = '#f8fafc';
+                ctx.fillRect(0, 0, width, height);
+
+                const spacing = 28;
+                ctx.fillStyle = '#cbd5e1';
+                const startX = (width % spacing) * 0.5;
+                const startY = (height % spacing) * 0.5;
+
+                for (let x = startX; x < width; x += spacing) {
+                    for (let y = startY; y < height; y += spacing) {
+                        ctx.beginPath();
+                        ctx.arc(x, y, 1.15, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            // Helper: draw double congruence tick marks perpendicular to P1-P2
+            function drawDoubleTicks(P1, P2, color, normalSign, alongShift) {
+                const dx = P2.x - P1.x;
+                const dy = P2.y - P1.y;
+                const len = Math.hypot(dx, dy);
+                if (!Number.isFinite(len) || len < 20) return;
+
+                const tx = dx / len;
+                const ty = dy / len;
+                const nx = -ty * normalSign;
+                const ny = tx * normalSign;
+
+                const shift = alongShift || 0;
+                const mx = (P1.x + P2.x) * 0.5 + tx * shift;
+                const my = (P1.y + P2.y) * 0.5 + ty * shift;
+
+                const tickHalf = 7.5;
+                const gap = 3.8;
+
+                ctx.save();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2.5;
+                ctx.lineCap = 'round';
+
+                [-gap, gap].forEach((offset) => {
+                    const cx = mx + tx * offset;
+                    const cy = my + ty * offset;
+                    ctx.beginPath();
+                    ctx.moveTo(cx - nx * tickHalf, cy - ny * tickHalf);
+                    ctx.lineTo(cx + nx * tickHalf, cy + ny * tickHalf);
+                    ctx.stroke();
+                });
+                ctx.restore();
+            }
+
+            // Helper: draw single midpoint congruence tick mark on BM and MC'
+            function drawSingleTick(P1, P2, color, alongShift) {
+                const dx = P2.x - P1.x;
+                const dy = P2.y - P1.y;
+                const len = Math.hypot(dx, dy);
+                if (!Number.isFinite(len) || len < 20) return;
+
+                const tx = dx / len;
+                const ty = dy / len;
+                const nx = -ty;
+                const ny = tx;
+
+                const shift = alongShift || 0;
+                const mx = (P1.x + P2.x) * 0.5 + tx * shift;
+                const my = (P1.y + P2.y) * 0.5 + ty * shift;
+
+                ctx.save();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2.2;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(mx - nx * 6.5, my - ny * 6.5);
+                ctx.lineTo(mx + nx * 6.5, my + ny * 6.5);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Guarded shortest-span angle sector & arc renderer
+            function drawAngleSector(vertex, p1, p2, radius, fillStyle, strokeStyle, dashed) {
+                const v1 = { x: p1.x - vertex.x, y: p1.y - vertex.y };
+                const v2 = { x: p2.x - vertex.x, y: p2.y - vertex.y };
+                const len1 = Math.hypot(v1.x, v1.y);
+                const len2 = Math.hypot(v2.x, v2.y);
+
+                if (!Number.isFinite(len1) || !Number.isFinite(len2) || len1 < 5 || len2 < 5) {
+                    return null;
+                }
+
+                const r = Math.max(4, Math.min(radius, len1 * 0.25, len2 * 0.25));
+                if (!Number.isFinite(r) || r <= 0) return null;
+
+                const a1 = Math.atan2(v1.y, v1.x);
+                const a2 = Math.atan2(v2.y, v2.x);
+                const diff = Math.atan2(Math.sin(a2 - a1), Math.cos(a2 - a1));
+
+                // Skip degenerate 0° or 180° slivers
+                if (!Number.isFinite(diff) || Math.abs(diff) < 0.01 || Math.abs(diff) > Math.PI - 0.01) {
+                    return null;
+                }
+
+                const anticlockwise = diff < 0;
+                const endAngle = a1 + diff;
+
+                ctx.save();
+                ctx.lineJoin = 'round';
+                ctx.lineCap = 'round';
+
+                // Filled sector wedge
+                ctx.beginPath();
+                ctx.moveTo(vertex.x, vertex.y);
+                ctx.arc(vertex.x, vertex.y, r, a1, endAngle, anticlockwise);
+                ctx.closePath();
+                ctx.fillStyle = fillStyle;
+                ctx.fill();
+
+                // Outer arc stroke
+                ctx.beginPath();
+                ctx.arc(vertex.x, vertex.y, r, a1, endAngle, anticlockwise);
+                ctx.strokeStyle = strokeStyle;
+                ctx.lineWidth = 2.6;
+                if (dashed) {
+                    ctx.setLineDash([5, 4]);
+                }
+                ctx.stroke();
+                ctx.restore();
+
+                return { bisectorAngle: a1 + diff * 0.5, radius: r };
+            }
+
+            // Crisp degree badge rendered along an angle's bisector
+            function drawAngleBadge(vertex, bisectorAngle, radius, degText, strokeColor, shiftX, shiftY) {
+		return;
+                if (!degText || !Number.isFinite(bisectorAngle)) return;
+                const textDist = radius + 24;
+                const tx = vertex.x + Math.cos(bisectorAngle) * textDist + (shiftX || 0);
+                const ty = vertex.y + Math.sin(bisectorAngle) * textDist + (shiftY || 0);
+
+                ctx.save();
+                ctx.font = '700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+                const metrics = ctx.measureText(degText);
+                const boxW = metrics.width + 16;
+                const boxH = 25;
+
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+                ctx.strokeStyle = strokeColor;
+                ctx.lineWidth = 1.6;
+                roundRect(ctx, tx - boxW * 0.5, ty - boxH * 0.5, boxW, boxH, 7);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = strokeColor;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(degText, tx, ty + 0.5);
+                ctx.restore();
+            }
+
+            // Fixed-vector right-angle symbol at M
+            function drawRightAngle(M, triHeight, halfBase, isFullyFolded) {
+                if (triHeight <= 20 || halfBase <= 20) return;
+                const sq = 14;
+                ctx.save();
+                ctx.strokeStyle = '#64748b';
+                ctx.lineWidth = 1.8;
+                ctx.lineJoin = 'round';
+                ctx.lineCap = 'round';
+
+                // Left right-angle square on AM and MB
+                ctx.beginPath();
+                ctx.moveTo(M.x - sq, M.y);
+                ctx.lineTo(M.x - sq, M.y - sq);
+                ctx.lineTo(M.x, M.y - sq);
+                ctx.stroke();
+
+                // Right right-angle square when unfolded
+                if (!isFullyFolded) {
+                    ctx.strokeStyle = 'rgba(100, 116, 139, 0.45)';
+                    ctx.beginPath();
+                    ctx.moveTo(M.x + sq, M.y);
+                    ctx.lineTo(M.x + sq, M.y - sq);
+                    ctx.lineTo(M.x, M.y - sq);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            function roundRect(ctx, x, y, w, h, r) {
+                ctx.beginPath();
+                ctx.moveTo(x + r, y);
+                ctx.lineTo(x + w - r, y);
+                ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+                ctx.lineTo(x + w, y + h - r);
+                ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                ctx.lineTo(x + r, y + h);
+                ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+                ctx.lineTo(x, y + r);
+                ctx.quadraticCurveTo(x, y, x + r, y);
+                ctx.closePath();
+            }
+
+            function drawVertexLabel(text, x, y, color) {
+                ctx.save();
+                ctx.font = '700 19px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+                ctx.fillStyle = color || '#0f172a';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(text, x, y);
+                ctx.restore();
+            }
+
+            function drawHandleDot(pt, color, isInteractive, isActive) {
+                ctx.save();
+                if (isInteractive) {
+                    ctx.beginPath();
+                    ctx.arc(pt.x, pt.y, isActive ? 17 : 13, 0, Math.PI * 2);
+                    ctx.fillStyle = isActive ? 'rgba(79, 70, 229, 0.20)' : 'rgba(79, 70, 229, 0.10)';
+                    ctx.fill();
+                }
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 6.5, 0, Math.PI * 2);
+                ctx.fillStyle = color;
+                ctx.fill();
+                ctx.lineWidth = 2.5;
+                ctx.strokeStyle = '#ffffff';
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            function draw() {
+                drawBackground();
+
+                const { A, B, C, M, triHeight, halfBase, baseAngleDeg } = getGeometry();
+                const folded = getFoldedC(B, C, M, halfBase, state.foldProgress);
+                const p = folded.fold;
+                const C_fold = { x: folded.x, y: folded.y };
+                const isFullyFolded = p >= 1;
+                const isFlipped = p >= 0.5;
+                const angleText = `${baseAngleDeg.toFixed(1)}°`;
+
+                ctx.save();
+                ctx.lineJoin = 'round';
+                ctx.lineCap = 'round';
+
+                // 1. Subtle dashed outline of original △AMC once folding starts
+                if (p > 0.005) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(A.x, A.y);
+                    ctx.lineTo(M.x, M.y);
+                    ctx.lineTo(C.x, C.y);
+                    ctx.closePath();
+                    ctx.fillStyle = 'rgba(226, 232, 240, 0.22)';
+                    ctx.fill();
+                    ctx.setLineDash([6, 6]);
+                    ctx.strokeStyle = '#cbd5e1';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.restore();
+                }
+
+                // 2. Stationary Left Half △ABM (Indigo)
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(A.x, A.y);
+                ctx.lineTo(B.x, B.y);
+                ctx.lineTo(M.x, M.y);
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(79, 70, 229, 0.12)';
+                ctx.fill();
+                ctx.strokeStyle = '#4f46e5';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                ctx.restore();
+
+                // Angle B sector (r = 34)
+                const sectorB = drawAngleSector(
+                    B,
+                    M,
+                    A,
+                    34,
+                    'rgba(79, 70, 229, 0.22)',
+                    '#4f46e5',
+                    false
+                );
+                if (sectorB && !isFullyFolded) {
+                    drawAngleBadge(B, sectorB.bisectorAngle, sectorB.radius, angleText, '#4f46e5', -4, 4);
+                }
+
+                // Congruence ticks on AB and BM (slightly offset along edge when 100% folded so both pairs remain distinct)
+                drawDoubleTicks(A, B, '#4f46e5', 1, isFullyFolded ? -11 : 0);
+                drawSingleTick(B, M, '#4f46e5', isFullyFolded ? -7 : 0);
+
+                // 3. Line of Symmetry AM & Right-Angle Symbol at M
+                drawRightAngle(M, triHeight, halfBase, isFullyFolded);
+
+                ctx.save();
+                ctx.setLineDash([7, 6]);
+                ctx.strokeStyle = '#475569';
+                ctx.lineWidth = 2.4;
+                ctx.beginPath();
+                ctx.moveTo(A.x, A.y - 12);
+                ctx.lineTo(M.x, M.y + 12);
+                ctx.stroke();
+                ctx.restore();
+
+                drawHandleDot(M, '#475569', false, false);
+                drawVertexLabel('M', M.x, M.y + 26, '#475569');
+
+                // 4. Dynamic Folding Right Half △AC'M (Teal)
+                ctx.save();
+                if (p > 0.01 && p < 0.99) {
+                    const shadowStrength = Math.sin(p * Math.PI);
+                    ctx.shadowColor = `rgba(15, 23, 42, ${0.20 * shadowStrength})`;
+                    ctx.shadowBlur = 16 * shadowStrength;
+                    ctx.shadowOffsetX = -5 * shadowStrength;
+                    ctx.shadowOffsetY = 8 * shadowStrength;
+                }
+
+                ctx.beginPath();
+                ctx.moveTo(A.x, A.y);
+                ctx.lineTo(M.x, M.y);
+                ctx.lineTo(C_fold.x, C_fold.y);
+                ctx.closePath();
+                ctx.fillStyle = isFullyFolded ? 'rgba(13, 148, 136, 0.16)' : 'rgba(13, 148, 136, 0.14)';
+                ctx.fill();
+
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+
+                ctx.strokeStyle = '#0d9488';
+                ctx.lineWidth = 3;
+                if (isFullyFolded) {
+                    ctx.setLineDash([6, 4]);
+                }
+                ctx.stroke();
+                ctx.restore();
+
+                // Angle C' sector: r = 24 inside ∠B when folded so both equal angles are unmistakably visible
+                const cRadius = isFullyFolded ? 24 : 34;
+                const sectorC = drawAngleSector(
+                    C_fold,
+                    A,
+                    M,
+                    cRadius,
+                    'rgba(13, 148, 136, 0.25)',
+                    '#0d9488',
+                    isFlipped
+                );
+                if (sectorC && p < 0.94) {
+                    drawAngleBadge(
+                        C_fold,
+                        sectorC.bisectorAngle,
+                        sectorC.radius,
+                        angleText,
+                        '#0d9488',
+                        isFlipped ? -4 : 4,
+                        4
+                    );
+                }
+
+                // Congruence ticks on AC' and MC'
+                drawDoubleTicks(A, C_fold, '#0d9488', isFlipped ? 1 : -1, isFullyFolded ? 11 : 0);
+                drawSingleTick(M, C_fold, '#0d9488', isFullyFolded ? 7 : 0);
+
+                // 5. Vertex Dots & Labels
+                const canDrag = p < 0.02;
+
+                // Vertex A
+                drawHandleDot(A, '#4f46e5', canDrag, state.dragging === 'A' || state.hovered === 'A');
+                drawVertexLabel('A', A.x, A.y - 24, '#0f172a');
+
+                if (isFullyFolded) {
+                    // Clean superimposed endpoint at B = C
+                    drawHandleDot(B, '#0f766e', false, false);
+                    drawVertexLabel('B = C', B.x - 36, B.y + 2, '#0f172a');
+
+                    // Crisp equal-angles readout safely below B = C above the slider dock
+                    const matchLabel = `∠B = ∠C = ${angleText}`;
+                    ctx.save();
+                    ctx.font = '700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+                    const mw = ctx.measureText(matchLabel).width + 22;
+                    const mh = 28;
+                    const badgeX = Math.max(mw * 0.5 + 16, B.x);
+                    const badgeY = Math.min(height - 102, B.y + 38);
+
+                    ctx.fillStyle = '#0f766e';
+                    roundRect(ctx, badgeX - mw * 0.5, badgeY - mh * 0.5, mw, mh, 999);
+                    ctx.fill();
+
+                    ctx.fillStyle = '#ffffff';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(matchLabel, badgeX, badgeY + 0.5);
+                    ctx.restore();
+                } else {
+                    // Separate B and C / C' during unfolded or mid-fold states
+                    drawHandleDot(B, '#4f46e5', canDrag, state.dragging === 'B' || state.hovered === 'B');
+                    drawVertexLabel('B', B.x - 22, B.y + 2, '#0f172a');
+
+                    drawHandleDot(C_fold, '#0d9488', canDrag, state.dragging === 'C' || state.hovered === 'C');
+                    if (p < 0.94) {
+                        const cLabelX = isFlipped ? C_fold.x - 22 : C_fold.x + 22;
+                        drawVertexLabel(p > 0.03 ? "C′" : "C", cLabelX, C_fold.y + 2, '#0f766e');
+                    }
+                }
+
+                ctx.restore();
+            }
+
+            // Slider interaction
+            foldSlider.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                state.foldProgress = val >= 99.5 ? 1 : Math.max(0, Math.min(1, val / 100));
+                foldValue.textContent = `${Math.round(state.foldProgress * 100)}%`;
+		foldValue.textContent = "";
+                draw();
+            });
+
+            // Pointer dragging for reshaping triangle when unfolded (fold < 2%)
+            function getPointerPos(evt) {
+                const rect = canvas.getBoundingClientRect();
+                const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+                const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+                return {
+                    x: clientX - rect.left,
+                    y: clientY - rect.top
+                };
+            }
+
+            function hitTest(pt) {
+                if (state.foldProgress >= 0.02) return null;
+                const { A, B, C } = getGeometry();
+                const radius = 26;
+                if (Math.hypot(pt.x - A.x, pt.y - A.y) <= radius) return 'A';
+                if (Math.hypot(pt.x - B.x, pt.y - B.y) <= radius) return 'B';
+                if (Math.hypot(pt.x - C.x, pt.y - C.y) <= radius) return 'C';
+                return null;
+            }
+
+            function onPointerDown(evt) {
+                const pt = getPointerPos(evt);
+                const hit = hitTest(pt);
+                if (hit) {
+                    state.dragging = hit;
+                    canvas.style.cursor = 'grabbing';
+                    draw();
+                }
+            }
+
+            function onPointerMove(evt) {
+                const pt = getPointerPos(evt);
+
+                if (!state.dragging) {
+                    const hit = hitTest(pt);
+                    if (hit !== state.hovered) {
+                        state.hovered = hit;
+                        canvas.style.cursor = hit ? 'grab' : 'default';
+                        draw();
+                    }
+                    return;
+                }
+
+                evt.preventDefault();
+                const padding = 80;
+                const centerX = width * 0.5;
+                const baseY = Math.max(padding + 80, Math.min(height - 145, height * 0.72));
+                const scaleRef = Math.min(width, height * 1.25);
+                const maxTriHeight = Math.max(60, baseY - padding);
+                const maxHalfBase = Math.max(60, centerX - padding);
+
+                if (state.dragging === 'A') {
+                    const newHeight = Math.max(60, Math.min(maxTriHeight, baseY - pt.y));
+                    state.heightRatio = newHeight / height;
+                } else if (state.dragging === 'B') {
+                    const newHalfBase = Math.max(60, Math.min(maxHalfBase, centerX - pt.x));
+                    state.halfBaseRatio = newHalfBase / scaleRef;
+                } else if (state.dragging === 'C') {
+                    const newHalfBase = Math.max(60, Math.min(maxHalfBase, pt.x - centerX));
+                    state.halfBaseRatio = newHalfBase / scaleRef;
+                }
+
+                draw();
+            }
+
+            function onPointerUp() {
+                if (state.dragging) {
+                    state.dragging = null;
+                    canvas.style.cursor = state.hovered ? 'grab' : 'default';
+                    draw();
+                }
+            }
+
+            canvas.addEventListener('mousedown', onPointerDown);
+            window.addEventListener('mousemove', onPointerMove);
+            window.addEventListener('mouseup', onPointerUp);
+
+            canvas.addEventListener('touchstart', onPointerDown, { passive: false });
+            window.addEventListener('touchmove', onPointerMove, { passive: false });
+            window.addEventListener('touchend', onPointerUp);
+
+            window.addEventListener('resize', resizeCanvas);
+
+            // Initial render
+            resizeCanvas();
+        })();
+    </script>
+</body>
+</html>
