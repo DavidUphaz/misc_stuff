@@ -36,22 +36,93 @@
             bottom: 24px;
             left: 50%;
             transform: translateX(-50%);
-            width: min(560px, calc(100vw - 32px));
+            width: min(740px, calc(100vw - 24px));
             background: rgba(255, 255, 255, 0.94);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
             border: 1px solid #e2e8f0;
             border-radius: 999px;
-            padding: 14px 24px;
+            padding: 10px 18px;
             box-shadow: 0 10px 30px -5px rgba(15, 23, 42, 0.08), 0 4px 10px -2px rgba(15, 23, 42, 0.04);
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 12px;
             z-index: 10;
+            flex-wrap: nowrap;
+        }
+
+        .dock-btn {
+            border: 1px solid #cbd5e1;
+            background: #f8fafc;
+            color: #334155;
+            font-size: 12.5px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 999px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.15s ease;
+        }
+
+        .dock-btn:hover {
+            background: #eef2ff;
+            border-color: #a5b4fc;
+            color: #4338ca;
+        }
+
+        .dock-btn.active {
+            background: #4f46e5;
+            border-color: #4f46e5;
+            color: #ffffff;
+            box-shadow: 0 2px 6px rgba(79, 70, 229, 0.3);
+        }
+
+        .axis-group {
+            display: none;
+            align-items: center;
+            gap: 4px;
+            background: #f1f5f9;
+            padding: 3px;
+            border-radius: 999px;
+            border: 1px solid #e2e8f0;
+        }
+
+        .axis-group.visible {
+            display: flex;
+        }
+
+        .axis-btn {
+            border: none;
+            background: transparent;
+            color: #475569;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 9px;
+            border-radius: 999px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.14s ease;
+        }
+
+        .axis-btn:hover {
+            color: #0f172a;
+        }
+
+        .axis-btn.active {
+            background: #0d9488;
+            color: #ffffff;
+            box-shadow: 0 1px 4px rgba(13, 148, 136, 0.35);
+        }
+
+        .dock-divider {
+            width: 1px;
+            height: 20px;
+            background: #e2e8f0;
+            flex-shrink: 0;
         }
 
         .slider-label {
-            font-size: 14px;
+            font-size: 13.5px;
             font-weight: 600;
             color: #334155;
             letter-spacing: 0.01em;
@@ -62,6 +133,7 @@
             -webkit-appearance: none;
             appearance: none;
             flex: 1;
+            min-width: 80px;
             height: 28px;
             background: transparent;
             cursor: pointer;
@@ -113,11 +185,25 @@
         .slider-value {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             font-variant-numeric: tabular-nums;
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 700;
             color: #4f46e5;
-            min-width: 44px;
+            min-width: 42px;
             text-align: right;
+        }
+
+        @media (max-width: 640px) {
+            .slider-dock {
+                border-radius: 22px;
+                flex-wrap: wrap;
+                justify-content: center;
+                padding: 10px 14px;
+                gap: 8px;
+                bottom: 14px;
+            }
+            .dock-divider {
+                display: none;
+            }
         }
     </style>
 </head>
@@ -126,9 +212,16 @@
     <canvas id="geoCanvas"></canvas>
 
     <div class="slider-dock">
+        <button id="eqToggleBtn" class="dock-btn" type="button" title="Snap to Equilateral Triangle (60°)">Equilateral</button>
+        <div id="axisGroup" class="axis-group" role="group" aria-label="Choose symmetry fold axis">
+            <button class="axis-btn active" type="button" data-axis="A">∠B = ∠C</button>
+            <button class="axis-btn" type="button" data-axis="B">∠A = ∠C</button>
+            <button class="axis-btn" type="button" data-axis="C">∠A = ∠B</button>
+        </div>
+        <div class="dock-divider"></div>
         <span class="slider-label">Fold</span>
-        <input id="foldSlider" type="range" min="0" max="99.4" step="0.2" value="0" aria-label="Paper fold percentage">
-        <span id="foldValue" class="slider-value"></span>
+        <input id="foldSlider" type="range" min="0" max="99.8" step="0.2" value="0" aria-label="Paper fold percentage">
+        <span id="foldValue" class="slider-value">0%</span>
     </div>
 
     <script>
@@ -137,36 +230,39 @@
             const ctx = canvas.getContext('2d');
             const foldSlider = document.getElementById('foldSlider');
             const foldValue = document.getElementById('foldValue');
+            const eqToggleBtn = document.getElementById('eqToggleBtn');
+            const axisGroup = document.getElementById('axisGroup');
+            const axisButtons = Array.from(axisGroup.querySelectorAll('.axis-btn'));
 
-            // Normalized geometry state (safe ratios within viewport padding)
-            const state = {
-                heightRatio: 0.54,     // Triangle height as fraction of viewport height
-                halfBaseRatio: 0.22,   // Half-base width as fraction of scale reference
-                foldProgress: 0,       // 0.0 to 1.0
-                dragging: null,        // 'A', 'B', or 'C'
-                hovered: null
-            };
-
-            let width = Math.max(300, window.innerWidth || 800);
-            let height = Math.max(300, window.innerHeight || 600);
-            let dpr = Math.min(window.devicePixelRatio || 1, 2);
+            let width = window.innerWidth;
+            let height = window.innerHeight;
+            let dpr = Math.max(1, window.devicePixelRatio || 1);
 
             function resizeCanvas() {
-                width = Math.max(300, window.innerWidth || 800);
-                height = Math.max(300, window.innerHeight || 600);
-                dpr = Math.min(window.devicePixelRatio || 1, 2);
+                width = window.innerWidth;
+                height = window.innerHeight;
+                dpr = Math.max(1, window.devicePixelRatio || 1);
                 canvas.width = Math.round(width * dpr);
                 canvas.height = Math.round(height * dpr);
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 draw();
             }
 
-            // Compute safe clamped pixel coordinates of vertices A, B, C, and midpoint M
+            // Normalized geometry state (safe ratios within viewport padding)
+            const state = {
+                heightRatio: 0.54,     // Triangle height as fraction of viewport height
+                halfBaseRatio: 0.22,   // Half-base width as fraction of scale reference
+                foldProgress: 0,       // 0.0 to 1.0
+                foldAxis: 'A',         // 'A' (folds C->B), 'B' (folds A->C), or 'C' (folds B->A)
+                dragging: null,        // 'A', 'B', or 'C'
+                hovered: null
+            };
+            // Compute safe clamped pixel coordinates of vertices A, B, C, and symmetry midpoints
             function getGeometry() {
                 const padding = 80;
                 const centerX = width * 0.5;
                 // Keep base safely above the bottom slider dock and readout badge
-                const baseY = Math.max(padding + 80, Math.min(height - 145, height * 0.72));
+                const baseY = Math.max(padding + 80, Math.min(height - 155, height * 0.71));
                 const scaleRef = Math.min(width, height * 1.25);
 
                 const maxTriHeight = Math.max(60, baseY - padding);
@@ -178,31 +274,207 @@
                 const A = { x: centerX, y: baseY - triHeight };
                 const B = { x: centerX - halfBase, y: baseY };
                 const C = { x: centerX + halfBase, y: baseY };
-                const M = { x: centerX, y: baseY };
+
+                const lenBC = halfBase * 2;
+                const lenAB = Math.hypot(halfBase, triHeight);
+                const lenAC = lenAB;
+
+                // Check equilateral tolerance (within 2.5px)
+                const isEquilateral = Math.abs(lenAB - lenBC) <= 2.5;
+
+                // Force axis 'A' whenever triangle is strictly isosceles (AB = AC != BC)
+                if (!isEquilateral && state.foldAxis !== 'A') {
+                    state.foldAxis = 'A';
+                }
 
                 const baseAngleRad = Math.atan2(triHeight, halfBase);
-                const baseAngleDeg = (baseAngleRad * 180) / Math.PI;
+                const baseAngleDeg = isEquilateral ? 60 : (baseAngleRad * 180) / Math.PI;
+                const apexAngleDeg = isEquilateral ? 60 : Math.max(0, 180 - 2 * baseAngleDeg);
 
-                return { A, B, C, M, triHeight, halfBase, baseAngleRad, baseAngleDeg };
+                // Midpoints of opposite sides for all 3 symmetry axes
+                const M_BC = { x: (B.x + C.x) * 0.5, y: (B.y + C.y) * 0.5 };
+                const M_AC = { x: (A.x + C.x) * 0.5, y: (A.y + C.y) * 0.5 };
+                const M_AB = { x: (A.x + B.x) * 0.5, y: (A.y + B.y) * 0.5 };
+
+                return {
+                    A, B, C,
+                    M_BC, M_AC, M_AB,
+                    triHeight, halfBase,
+                    lenAB, lenAC, lenBC,
+                    isEquilateral,
+                    baseAngleDeg, apexAngleDeg
+                };
             }
 
-            // Pure 2D orthographic folding across the vertical symmetry axis x = M.x
-            // Immune to perspective divide-by-zero or coordinate inversion
-            function getFoldedC(B, C, M, halfBase, rawFold) {
+            // Map chosen foldAxis ('A', 'B', or 'C') to (P_apex, P_fixed, P_move, M_opp)
+            function getFoldConfiguration(geom) {
+                const { A, B, C, M_BC, M_AC, M_AB, baseAngleDeg, apexAngleDeg } = geom;
+                if (state.foldAxis === 'B' && geom.isEquilateral) {
+                    return {
+                        axisKey: 'B',
+                        apexName: 'B',
+                        fixedName: 'C',
+                        moveName: 'A',
+                        midName: 'M',
+                        P_apex: B,
+                        P_fixed: C,
+                        P_move: A,
+                        M: M_AC,
+                        matchedAngleDeg: baseAngleDeg,
+                        apexAngleDeg: baseAngleDeg,
+                        pairLabel: '∠A = ∠C'
+                    };
+                }
+                if (state.foldAxis === 'C' && geom.isEquilateral) {
+                    return {
+                        axisKey: 'C',
+                        apexName: 'C',
+                        fixedName: 'A',
+                        moveName: 'B',
+                        midName: 'M',
+                        P_apex: C,
+                        P_fixed: A,
+                        P_move: B,
+                        M: M_AB,
+                        matchedAngleDeg: baseAngleDeg,
+                        apexAngleDeg: baseAngleDeg,
+                        pairLabel: '∠A = ∠B'
+                    };
+                }
+                return {
+                    axisKey: 'A',
+                    apexName: 'A',
+                    fixedName: 'B',
+                    moveName: 'C',
+                    midName: 'M',
+                    P_apex: A,
+                    P_fixed: B,
+                    P_move: C,
+                    M: M_BC,
+                    matchedAngleDeg: baseAngleDeg,
+                    apexAngleDeg,
+                    pairLabel: '∠B = ∠C'
+                };
+            }
+
+            // Generalized 2D orthographic folding across any axis (P_apex - M)
+            function getFoldedVertex(P_apex, P_fixed, P_move, M, rawFold) {
                 const fold = rawFold >= 0.995 ? 1 : Math.max(0, Math.min(1, rawFold));
                 if (fold >= 1) {
-                    return { x: B.x, y: B.y, fold: 1 };
+                    return { x: P_fixed.x, y: P_fixed.y, fold: 1 };
                 }
                 if (fold <= 0.001) {
-                    return { x: C.x, y: C.y, fold: 0 };
+                    return { x: P_move.x, y: P_move.y, fold: 0 };
                 }
+
+                const axDx = P_apex.x - M.x;
+                const axDy = P_apex.y - M.y;
+                const axLen = Math.hypot(axDx, axDy) || 1;
+                const u_axis = { x: axDx / axLen, y: axDy / axLen };
+
+                const perpDx = P_move.x - M.x;
+                const perpDy = P_move.y - M.y;
+                const halfBase = Math.hypot(perpDx, perpDy);
+                const u_perp = halfBase > 0.001
+                    ? { x: perpDx / halfBase, y: perpDy / halfBase }
+                    : { x: 1, y: 0 };
+
                 const theta = fold * Math.PI;
-                const lift = Math.min(36, halfBase * 0.18);
+                const lift = Math.min(halfBase * 0.28, 42);
+
                 return {
-                    x: M.x + halfBase * Math.cos(theta),
-                    y: M.y - lift * Math.sin(theta),
+                    x: M.x + u_perp.x * (halfBase * Math.cos(theta)) + u_axis.x * (lift * Math.sin(theta)),
+                    y: M.y + u_perp.y * (halfBase * Math.cos(theta)) + u_axis.y * (lift * Math.sin(theta)),
                     fold
                 };
+            }
+
+            // Snap triangle smoothly to exact equilateral proportions (AB = BC = CA)
+            function setEquilateralProportions() {
+                const padding = 80;
+                const centerX = width * 0.5;
+                const baseY = Math.max(padding + 80, Math.min(height - 155, height * 0.71));
+                const scaleRef = Math.min(width, height * 1.25);
+                const maxTriHeight = Math.max(60, baseY - padding);
+                const maxHalfBase = Math.max(60, centerX - padding);
+
+                // For equilateral triangle: triHeight = halfBase * sqrt(3)
+                const SQRT3 = Math.sqrt(3);
+                let targetHalfBase = Math.min(maxHalfBase, maxTriHeight / SQRT3, scaleRef * 0.24);
+                targetHalfBase = Math.max(60, targetHalfBase);
+                const targetHeight = targetHalfBase * SQRT3;
+
+                state.halfBaseRatio = targetHalfBase / scaleRef;
+                state.heightRatio = targetHeight / height;
+            }
+            // Fixed-vector right-angle symbol at M along (M -> P_fixed/P_move) and (M -> P_apex)
+            function drawRightAngle(M, P_apex, P_fixed, P_move, isFullyFolded) {
+                const vAxis = { x: P_apex.x - M.x, y: P_apex.y - M.y };
+                const vFixed = { x: P_fixed.x - M.x, y: P_fixed.y - M.y };
+                const vMove = { x: P_move.x - M.x, y: P_move.y - M.y };
+                const lenA = Math.hypot(vAxis.x, vAxis.y);
+                const lenF = Math.hypot(vFixed.x, vFixed.y);
+                const lenM = Math.hypot(vMove.x, vMove.y);
+
+                if (lenA <= 20 || lenF <= 20) return;
+
+                const ua = { x: vAxis.x / lenA, y: vAxis.y / lenA };
+                const uf = { x: vFixed.x / lenF, y: vFixed.y / lenF };
+                const sq = 13;
+
+                ctx.save();
+                ctx.strokeStyle = '#64748b';
+                ctx.lineWidth = 1.8;
+                ctx.lineJoin = 'round';
+                ctx.lineCap = 'round';
+
+                // Stationary side right-angle square
+                ctx.beginPath();
+                ctx.moveTo(M.x + uf.x * sq, M.y + uf.y * sq);
+                ctx.lineTo(M.x + (uf.x + ua.x) * sq, M.y + (uf.y + ua.y) * sq);
+                ctx.lineTo(M.x + ua.x * sq, M.y + ua.y * sq);
+                ctx.stroke();
+
+                // Moving side right-angle square when unfolded
+                if (!isFullyFolded && lenM > 20) {
+                    const um = { x: vMove.x / lenM, y: vMove.y / lenM };
+                    ctx.strokeStyle = 'rgba(100, 116, 139, 0.45)';
+                    ctx.beginPath();
+                    ctx.moveTo(M.x + um.x * sq, M.y + um.y * sq);
+                    ctx.lineTo(M.x + (um.x + ua.x) * sq, M.y + (um.y + ua.y) * sq);
+                    ctx.lineTo(M.x + ua.x * sq, M.y + ua.y * sq);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            // Compute outward offset label position away from triangle centroid
+            function getOutwardLabelPos(pt, centroid, dist) {
+                const dx = pt.x - centroid.x;
+                const dy = pt.y - centroid.y;
+                const len = Math.hypot(dx, dy) || 1;
+                return {
+                    x: pt.x + (dx / len) * dist,
+                    y: pt.y + (dy / len) * dist
+                };
+            }
+
+            // Distance from point P to line segment AB (for clicking symmetry lines)
+            function distToSegment(P, A, B) {
+                const vx = B.x - A.x;
+                const vy = B.y - A.y;
+                const lenSq = vx * vx + vy * vy;
+                if (lenSq < 1e-6) return Math.hypot(P.x - A.x, P.y - A.y);
+                const t = Math.max(0, Math.min(1, ((P.x - A.x) * vx + (P.y - A.y) * vy) / lenSq));
+                return Math.hypot(P.x - (A.x + t * vx), P.y - (A.y + t * vy));
+            }
+
+            function syncUIControls(isEquilateral) {
+                eqToggleBtn.classList.toggle('active', isEquilateral);
+                axisGroup.classList.toggle('visible', isEquilateral);
+                axisButtons.forEach((btn) => {
+                    btn.classList.toggle('active', btn.dataset.axis === state.foldAxis);
+                });
             }
 
             // Subtle dot-grid paper background
@@ -340,7 +612,6 @@
 
             // Crisp degree badge rendered along an angle's bisector
             function drawAngleBadge(vertex, bisectorAngle, radius, degText, strokeColor, shiftX, shiftY) {
-		return;
                 if (!degText || !Number.isFinite(bisectorAngle)) return;
                 const textDist = radius + 24;
                 const tx = vertex.x + Math.cos(bisectorAngle) * textDist + (shiftX || 0);
@@ -362,40 +633,12 @@
                 ctx.fillStyle = strokeColor;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(degText, tx, ty + 0.5);
-                ctx.restore();
-            }
-
-            // Fixed-vector right-angle symbol at M
-            function drawRightAngle(M, triHeight, halfBase, isFullyFolded) {
-                if (triHeight <= 20 || halfBase <= 20) return;
-                const sq = 14;
-                ctx.save();
-                ctx.strokeStyle = '#64748b';
-                ctx.lineWidth = 1.8;
-                ctx.lineJoin = 'round';
-                ctx.lineCap = 'round';
-
-                // Left right-angle square on AM and MB
-                ctx.beginPath();
-                ctx.moveTo(M.x - sq, M.y);
-                ctx.lineTo(M.x - sq, M.y - sq);
-                ctx.lineTo(M.x, M.y - sq);
-                ctx.stroke();
-
-                // Right right-angle square when unfolded
-                if (!isFullyFolded) {
-                    ctx.strokeStyle = 'rgba(100, 116, 139, 0.45)';
-                    ctx.beginPath();
-                    ctx.moveTo(M.x + sq, M.y);
-                    ctx.lineTo(M.x + sq, M.y - sq);
-                    ctx.lineTo(M.x, M.y - sq);
-                    ctx.stroke();
-                }
+                //ctx.fillText(degText, tx, ty + 0.5);
                 ctx.restore();
             }
 
             function roundRect(ctx, x, y, w, h, r) {
+		return;
                 ctx.beginPath();
                 ctx.moveTo(x + r, y);
                 ctx.lineTo(x + w - r, y);
@@ -440,25 +683,59 @@
             function draw() {
                 drawBackground();
 
-                const { A, B, C, M, triHeight, halfBase, baseAngleDeg } = getGeometry();
-                const folded = getFoldedC(B, C, M, halfBase, state.foldProgress);
+                const geom = getGeometry();
+                const { A, B, C, M_BC, M_AC, M_AB, isEquilateral, baseAngleDeg, apexAngleDeg } = geom;
+                syncUIControls(isEquilateral);
+
+                const cfg = getFoldConfiguration(geom);
+                const { P_apex, P_fixed, P_move, M, apexName, fixedName, moveName, matchedAngleDeg, pairLabel } = cfg;
+
+                const folded = getFoldedVertex(P_apex, P_fixed, P_move, M, state.foldProgress);
                 const p = folded.fold;
-                const C_fold = { x: folded.x, y: folded.y };
+                const P_move_fold = { x: folded.x, y: folded.y };
                 const isFullyFolded = p >= 1;
                 const isFlipped = p >= 0.5;
-                const angleText = `${baseAngleDeg.toFixed(1)}°`;
+
+                const centroid = {
+                    x: (A.x + B.x + C.x) / 3,
+                    y: (A.y + B.y + C.y) / 3
+                };
+
+                const matchedAngleText = `${matchedAngleDeg.toFixed(1)}°`;
+                const apexAngleText = `${apexAngleDeg.toFixed(1)}°`;
 
                 ctx.save();
                 ctx.lineJoin = 'round';
                 ctx.lineCap = 'round';
 
-                // 1. Subtle dashed outline of original △AMC once folding starts
+                // 0. If equilateral, draw faint secondary symmetry axes so user sees all 3 axes
+                if (isEquilateral) {
+                    const allAxes = [
+                        { key: 'A', v: A, m: M_BC },
+                        { key: 'B', v: B, m: M_AC },
+                        { key: 'C', v: C, m: M_AB }
+                    ];
+                    allAxes.forEach((ax) => {
+                        if (ax.key === cfg.axisKey) return;
+                        ctx.save();
+                        ctx.setLineDash([4, 6]);
+                        ctx.strokeStyle = 'rgba(100, 116, 139, 0.35)';
+                        ctx.lineWidth = 1.6;
+                        ctx.beginPath();
+                        ctx.moveTo(ax.v.x, ax.v.y);
+                        ctx.lineTo(ax.m.x, ax.m.y);
+                        ctx.stroke();
+                        ctx.restore();
+                    });
+                }
+
+                // 1. Subtle dashed outline of original moving half △(P_apex, M, P_move) once folding starts
                 if (p > 0.005) {
                     ctx.save();
                     ctx.beginPath();
-                    ctx.moveTo(A.x, A.y);
+                    ctx.moveTo(P_apex.x, P_apex.y);
                     ctx.lineTo(M.x, M.y);
-                    ctx.lineTo(C.x, C.y);
+                    ctx.lineTo(P_move.x, P_move.y);
                     ctx.closePath();
                     ctx.fillStyle = 'rgba(226, 232, 240, 0.22)';
                     ctx.fill();
@@ -469,11 +746,11 @@
                     ctx.restore();
                 }
 
-                // 2. Stationary Left Half △ABM (Indigo)
+                // 2. Stationary Half △(P_apex, P_fixed, M) (Indigo)
                 ctx.save();
                 ctx.beginPath();
-                ctx.moveTo(A.x, A.y);
-                ctx.lineTo(B.x, B.y);
+                ctx.moveTo(P_apex.x, P_apex.y);
+                ctx.lineTo(P_fixed.x, P_fixed.y);
                 ctx.lineTo(M.x, M.y);
                 ctx.closePath();
                 ctx.fillStyle = 'rgba(79, 70, 229, 0.12)';
@@ -483,41 +760,65 @@
                 ctx.stroke();
                 ctx.restore();
 
-                // Angle B sector (r = 34)
-                const sectorB = drawAngleSector(
-                    B,
+                // Angle sector at P_fixed (r = 34)
+                const sectorFixed = drawAngleSector(
+                    P_fixed,
                     M,
-                    A,
+                    P_apex,
                     34,
                     'rgba(79, 70, 229, 0.22)',
                     '#4f46e5',
                     false
                 );
-                if (sectorB && !isFullyFolded) {
-                    drawAngleBadge(B, sectorB.bisectorAngle, sectorB.radius, angleText, '#4f46e5', -4, 4);
+                if (sectorFixed && !isFullyFolded) {
+                    drawAngleBadge(P_fixed, sectorFixed.bisectorAngle, sectorFixed.radius, matchedAngleText, '#4f46e5', 0, 0);
                 }
 
-                // Congruence ticks on AB and BM (slightly offset along edge when 100% folded so both pairs remain distinct)
-                drawDoubleTicks(A, B, '#4f46e5', 1, isFullyFolded ? -11 : 0);
-                drawSingleTick(B, M, '#4f46e5', isFullyFolded ? -7 : 0);
+                // Angle sector at P_apex (shows 60.0° when equilateral or vertex angle when isosceles)
+                const sectorApex = drawAngleSector(
+                    P_apex,
+                    P_fixed,
+                    P_move_fold,
+                    30,
+                    'rgba(99, 102, 241, 0.14)',
+                    '#6366f1',
+                    false
+                );
+                if (sectorApex && !isFullyFolded) {
+                    drawAngleBadge(P_apex, sectorApex.bisectorAngle, sectorApex.radius, apexAngleText, '#6366f1', 0, 0);
+                }
 
-                // 3. Line of Symmetry AM & Right-Angle Symbol at M
-                drawRightAngle(M, triHeight, halfBase, isFullyFolded);
+                // Congruence ticks on stationary side (P_apex - P_fixed) and half-base (P_fixed - M)
+                drawDoubleTicks(P_apex, P_fixed, '#4f46e5', 1, isFullyFolded ? -11 : 0);
+                if (isEquilateral) {
+                    // All 3 sides are equal in an equilateral triangle -> double ticks on full base too
+                    drawDoubleTicks(P_fixed, M, '#4f46e5', -1, isFullyFolded ? -9 : 0);
+                } else {
+                    drawSingleTick(P_fixed, M, '#4f46e5', isFullyFolded ? -7 : 0);
+                }
+
+                // 3. Active Line of Symmetry (P_apex -> M) & Right-Angle Symbol at M
+                drawRightAngle(M, P_apex, P_fixed, P_move, isFullyFolded);
+
+                const axisDx = M.x - P_apex.x;
+                const axisDy = M.y - P_apex.y;
+                const axisLen = Math.hypot(axisDx, axisDy) || 1;
+                const uAx = { x: axisDx / axisLen, y: axisDy / axisLen };
 
                 ctx.save();
                 ctx.setLineDash([7, 6]);
-                ctx.strokeStyle = '#475569';
-                ctx.lineWidth = 2.4;
+                ctx.strokeStyle = '#334155';
+                ctx.lineWidth = 2.6;
                 ctx.beginPath();
-                ctx.moveTo(A.x, A.y - 12);
-                ctx.lineTo(M.x, M.y + 12);
+                ctx.moveTo(P_apex.x - uAx.x * 12, P_apex.y - uAx.y * 12);
+                ctx.lineTo(M.x + uAx.x * 12, M.y + uAx.y * 12);
                 ctx.stroke();
                 ctx.restore();
 
                 drawHandleDot(M, '#475569', false, false);
-                drawVertexLabel('M', M.x, M.y + 26, '#475569');
+                drawVertexLabel('M', M.x + uAx.x * 26, M.y + uAx.y * 26, '#475569');
 
-                // 4. Dynamic Folding Right Half △AC'M (Teal)
+                // 4. Dynamic Folding Half △(P_apex, M, P_move') (Teal)
                 ctx.save();
                 if (p > 0.01 && p < 0.99) {
                     const shadowStrength = Math.sin(p * Math.PI);
@@ -528,9 +829,9 @@
                 }
 
                 ctx.beginPath();
-                ctx.moveTo(A.x, A.y);
+                ctx.moveTo(P_apex.x, P_apex.y);
                 ctx.lineTo(M.x, M.y);
-                ctx.lineTo(C_fold.x, C_fold.y);
+                ctx.lineTo(P_move_fold.x, P_move_fold.y);
                 ctx.closePath();
                 ctx.fillStyle = isFullyFolded ? 'rgba(13, 148, 136, 0.16)' : 'rgba(13, 148, 136, 0.14)';
                 ctx.fill();
@@ -548,53 +849,62 @@
                 ctx.stroke();
                 ctx.restore();
 
-                // Angle C' sector: r = 24 inside ∠B when folded so both equal angles are unmistakably visible
+                // Angle sector at P_move': r = 24 concentric inside ∠P_fixed when folded
                 const cRadius = isFullyFolded ? 24 : 34;
-                const sectorC = drawAngleSector(
-                    C_fold,
-                    A,
+                const sectorMove = drawAngleSector(
+                    P_move_fold,
+                    P_apex,
                     M,
                     cRadius,
                     'rgba(13, 148, 136, 0.25)',
                     '#0d9488',
                     isFlipped
                 );
-                if (sectorC && p < 0.94) {
+                if (sectorMove && p < 0.94) {
                     drawAngleBadge(
-                        C_fold,
-                        sectorC.bisectorAngle,
-                        sectorC.radius,
-                        angleText,
+                        P_move_fold,
+                        sectorMove.bisectorAngle,
+                        sectorMove.radius,
+                        matchedAngleText,
                         '#0d9488',
-                        isFlipped ? -4 : 4,
-                        4
+                        0,
+                        0
                     );
                 }
 
-                // Congruence ticks on AC' and MC'
-                drawDoubleTicks(A, C_fold, '#0d9488', isFlipped ? 1 : -1, isFullyFolded ? 11 : 0);
-                drawSingleTick(M, C_fold, '#0d9488', isFullyFolded ? 7 : 0);
+                // Congruence ticks on moving side (P_apex - P_move') and moving half-base (M - P_move')
+                drawDoubleTicks(P_apex, P_move_fold, '#0d9488', isFlipped ? 1 : -1, isFullyFolded ? 11 : 0);
+                if (isEquilateral) {
+                    drawDoubleTicks(M, P_move_fold, '#0d9488', isFlipped ? -1 : 1, isFullyFolded ? 9 : 0);
+                } else {
+                    drawSingleTick(M, P_move_fold, '#0d9488', isFullyFolded ? 7 : 0);
+                }
 
                 // 5. Vertex Dots & Labels
                 const canDrag = p < 0.02;
 
-                // Vertex A
-                drawHandleDot(A, '#4f46e5', canDrag, state.dragging === 'A' || state.hovered === 'A');
-                drawVertexLabel('A', A.x, A.y - 24, '#0f172a');
+                // Apex Vertex
+                const apexLabelPos = getOutwardLabelPos(P_apex, centroid, 24);
+                drawHandleDot(P_apex, '#4f46e5', canDrag, state.dragging === apexName || state.hovered === apexName);
+                drawVertexLabel(apexName, apexLabelPos.x, apexLabelPos.y, '#0f172a');
 
                 if (isFullyFolded) {
-                    // Clean superimposed endpoint at B = C
-                    drawHandleDot(B, '#0f766e', false, false);
-                    drawVertexLabel('B = C', B.x - 36, B.y + 2, '#0f172a');
+                    // Clean superimposed endpoint at fixedName = moveName (e.g., B = C, A = C, or A = B)
+                    const mergedPos = getOutwardLabelPos(P_fixed, centroid, 34);
+                    drawHandleDot(P_fixed, '#0f766e', false, false);
+                    drawVertexLabel(`${fixedName} = ${moveName}`, mergedPos.x, mergedPos.y, '#0f172a');
 
-                    // Crisp equal-angles readout safely below B = C above the slider dock
-                    const matchLabel = `∠B = ∠C = ${angleText}`;
+                    // Crisp equal-angles pill badge safely positioned near merged vertex
+                    const matchLabel = isEquilateral
+                        ? `${pairLabel} = 60.0°  (∠A = ∠B = ∠C = 60.0°)`
+                        : `${pairLabel} = ${matchedAngleText}`;
+
                     ctx.save();
-                    ctx.font = '700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-                    const mw = ctx.measureText(matchLabel).width + 22;
-                    const mh = 28;
-                    const badgeX = Math.max(mw * 0.5 + 16, B.x);
-                    const badgeY = Math.min(height - 102, B.y + 38);
+                    ctx.font = '700 13.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+                    const mw = ctx.measureText(matchLabel).width + 24;
+                    const mh = 30;
+                    const badgeX = Math.max(mw * 0.5 + 16, Math.min(width - mw * 0.5 - 16, P_fixed.x));
+                    const badgeY = Math.max(36, Math.min(height - 108, P_fixed.y + 42));
 
                     ctx.fillStyle = '#0f766e';
                     roundRect(ctx, badgeX - mw * 0.5, badgeY - mh * 0.5, mw, mh, 999);
@@ -606,19 +916,37 @@
                     ctx.fillText(matchLabel, badgeX, badgeY + 0.5);
                     ctx.restore();
                 } else {
-                    // Separate B and C / C' during unfolded or mid-fold states
-                    drawHandleDot(B, '#4f46e5', canDrag, state.dragging === 'B' || state.hovered === 'B');
-                    drawVertexLabel('B', B.x - 22, B.y + 2, '#0f172a');
+                    // Separate stationary and moving base vertices during unfolded or mid-fold states
+                    const fixedLabelPos = getOutwardLabelPos(P_fixed, centroid, 24);
+                    drawHandleDot(P_fixed, '#4f46e5', canDrag, state.dragging === fixedName || state.hovered === fixedName);
+                    drawVertexLabel(fixedName, fixedLabelPos.x, fixedLabelPos.y, '#0f172a');
 
-                    drawHandleDot(C_fold, '#0d9488', canDrag, state.dragging === 'C' || state.hovered === 'C');
+                    drawHandleDot(P_move_fold, '#0d9488', canDrag, state.dragging === moveName || state.hovered === moveName);
                     if (p < 0.94) {
-                        const cLabelX = isFlipped ? C_fold.x - 22 : C_fold.x + 22;
-                        drawVertexLabel(p > 0.03 ? "C′" : "C", cLabelX, C_fold.y + 2, '#0f766e');
+                        const moveLabelPos = getOutwardLabelPos(P_move_fold, centroid, 24);
+                        drawVertexLabel(p > 0.03 ? `${moveName}′` : moveName, moveLabelPos.x, moveLabelPos.y, '#0f766e');
                     }
                 }
 
                 ctx.restore();
             }
+
+            // Equilateral preset button
+            eqToggleBtn.addEventListener('click', () => {
+                setEquilateralProportions();
+                draw();
+            });
+
+            // Symmetry fold axis selector buttons (∠B = ∠C | ∠A = ∠C | ∠A = ∠B)
+            axisButtons.forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const nextAxis = btn.dataset.axis;
+                    if (nextAxis && state.foldAxis !== nextAxis) {
+                        state.foldAxis = nextAxis;
+                        draw();
+                    }
+                });
+            });
 
             // Slider interaction
             foldSlider.addEventListener('input', (e) => {
@@ -657,6 +985,30 @@
                     state.dragging = hit;
                     canvas.style.cursor = 'grabbing';
                     draw();
+                    return;
+                }
+
+                // When equilateral, clicking near one of the 3 symmetry lines switches the fold axis directly
+                const geom = getGeometry();
+                if (geom.isEquilateral) {
+                    const axes = [
+                        { key: 'A', v: geom.A, m: geom.M_BC },
+                        { key: 'B', v: geom.B, m: geom.M_AC },
+                        { key: 'C', v: geom.C, m: geom.M_AB }
+                    ];
+                    let bestAxis = null;
+                    let bestDist = 18;
+                    axes.forEach((ax) => {
+                        const d = distToSegment(pt, ax.v, ax.m);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            bestAxis = ax.key;
+                        }
+                    });
+                    if (bestAxis && bestAxis !== state.foldAxis) {
+                        state.foldAxis = bestAxis;
+                        draw();
+                    }
                 }
             }
 
@@ -676,19 +1028,36 @@
                 evt.preventDefault();
                 const padding = 80;
                 const centerX = width * 0.5;
-                const baseY = Math.max(padding + 80, Math.min(height - 145, height * 0.72));
+                const baseY = Math.max(padding + 80, Math.min(height - 155, height * 0.71));
                 const scaleRef = Math.min(width, height * 1.25);
                 const maxTriHeight = Math.max(60, baseY - padding);
                 const maxHalfBase = Math.max(60, centerX - padding);
+                const SQRT3 = Math.sqrt(3);
 
                 if (state.dragging === 'A') {
-                    const newHeight = Math.max(60, Math.min(maxTriHeight, baseY - pt.y));
+                    let newHeight = Math.max(60, Math.min(maxTriHeight, baseY - pt.y));
+                    const curHalfBase = Math.max(60, Math.min(maxHalfBase, state.halfBaseRatio * scaleRef));
+                    const eqHeight = curHalfBase * SQRT3;
+                    // Gentle magnetic snap to equilateral when |AB - BC| is within 6px
+                    if (Math.abs(newHeight - eqHeight) <= 6 && eqHeight <= maxTriHeight) {
+                        newHeight = eqHeight;
+                    }
                     state.heightRatio = newHeight / height;
                 } else if (state.dragging === 'B') {
-                    const newHalfBase = Math.max(60, Math.min(maxHalfBase, centerX - pt.x));
+                    let newHalfBase = Math.max(60, Math.min(maxHalfBase, centerX - pt.x));
+                    const curHeight = Math.max(60, Math.min(maxTriHeight, state.heightRatio * height));
+                    const eqHalfBase = curHeight / SQRT3;
+                    if (Math.abs(newHalfBase - eqHalfBase) <= 6 && eqHalfBase >= 60 && eqHalfBase <= maxHalfBase) {
+                        newHalfBase = eqHalfBase;
+                    }
                     state.halfBaseRatio = newHalfBase / scaleRef;
                 } else if (state.dragging === 'C') {
-                    const newHalfBase = Math.max(60, Math.min(maxHalfBase, pt.x - centerX));
+                    let newHalfBase = Math.max(60, Math.min(maxHalfBase, pt.x - centerX));
+                    const curHeight = Math.max(60, Math.min(maxTriHeight, state.heightRatio * height));
+                    const eqHalfBase = curHeight / SQRT3;
+                    if (Math.abs(newHalfBase - eqHalfBase) <= 6 && eqHalfBase >= 60 && eqHalfBase <= maxHalfBase) {
+                        newHalfBase = eqHalfBase;
+                    }
                     state.halfBaseRatio = newHalfBase / scaleRef;
                 }
 
